@@ -1,0 +1,23 @@
+# Byte-compiled / Python cache files
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# Large Datasets & Media
+anime_images/
+urltxt/
+
+# Generated Database / Models
+anime_landmarks_db.npy
+*.task
+
+# IDE / OS junk
+.DS_Store
+.vscode/
+.idea/
