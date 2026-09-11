@@ -15,33 +15,93 @@
       margin: 0;
       padding: 20px;
     }
+
     #loading-overlay {
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(17, 17, 17, 0.95);
+      background: #121318;
       display: flex;
-      flex-direction: column;
       justify-content: center;
       align-items: center;
       z-index: 9999;
-      font-size: 1.5em;
+      transition: opacity 0.2s ease-out;
     }
-    .spinner {
-      border: 4px solid #333;
-      border-top: 4px solid #00ff00;
-      border-radius: 50%;
-      width: 50px;
-      height: 50px;
-      animation: spin 1s linear infinite;
+
+    .loading-card {
+      background: #1c1e2c;
+      border: 1px solid #32374a;
+      border-radius: 12px;
+      padding: 30px;
+      width: 420px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .gif-container {
+      width: 100%;
+      height: 220px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #52b7b5;
+      box-shadow: 0 0 15px rgba(82, 183, 183, 0.25);
       margin-bottom: 20px;
+      background: #000;
+      display: flex;
+      justify-content: center;
+      align-items: center;
     }
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
+
+    .gif-container img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
     }
+
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      background: #2a2e40;
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+      margin-bottom: 15px;
+    }
+
+    .progress-bar {
+      width: 40%;
+      height: 100%;
+      background: linear-gradient(90deg, #388e8c, #52b7b5);
+      border-radius: 3px;
+      position: absolute;
+      animation: indeterminate 1.5s infinite ease-in-out;
+    }
+
+    @keyframes indeterminate {
+      0% { left: -40%; }
+      100% { left: 100%; }
+    }
+
+    .status-text {
+      color: #b0b5c0;
+      font-size: 0.9em;
+      text-align: center;
+      letter-spacing: 0.5px;
+    }
+
+    /* Main UI elements hidden during loading phase */
+    .main-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      opacity: 0;
+      transition: opacity 0.2s ease-in;
+    }
+
     .controls {
       display: flex;
       gap: 30px;
@@ -85,43 +145,52 @@
       left: 0;
       width: 100%;
       height: 100%;
-      transform: scaleX(-1); /* Mirrors local visual display */
+      transform: scaleX(-1);
     }
     #match-img {
       width: 100%;
       height: auto;
       max-height: 100%;
-      object-fit: contain; /* Keeps correct un-mirrored anime frame orientation */
+      object-fit: contain;
     }
   </style>
 </head>
 <body>
 
   <div id="loading-overlay">
-    <div class="spinner"></div>
-    <div id="loading-text">Connecting to backend server...</div>
+    <div class="loading-card">
+      <div class="gif-container">
+        <img src="/static/loading.gif" alt="Loading...">
+      </div>
+      <div class="progress-track">
+        <div class="progress-bar"></div>
+      </div>
+      <div id="status-text" class="status-text">Connecting to server...</div>
+    </div>
   </div>
 
-  <h2>Anime Face Matcher</h2>
+  <div id="main-content" class="main-content">
+    <h2>Anime Face Matcher</h2>
 
-  <div class="controls">
-    <div class="control-group">
-      <label for="alphaSlider">Match Focus: <span id="alphaVal">Expression (30%) / Spatial (70%)</span></label>
-      <input type="range" id="alphaSlider" min="0" max="1" step="0.01" value="0.3" style="width: 100%;">
-      <div class="slider-labels">
-        <span>Spatial Heavy</span>
-        <span>Expression Heavy</span>
+    <div class="controls">
+      <div class="control-group">
+        <label for="alphaSlider">Match Focus: <span id="alphaVal">Expression (30%) / Spatial (70%)</span></label>
+        <input type="range" id="alphaSlider" min="0" max="1" step="0.01" value="0.3" style="width: 100%;">
+        <div class="slider-labels">
+          <span>Spatial Heavy</span>
+          <span>Expression Heavy</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="container">
-    <div class="box">
-      <video id="video" autoplay playsinline muted></video>
-      <canvas id="canvas"></canvas>
-    </div>
-    <div class="box">
-      <img id="match-img" src="" alt="Waiting for match...">
+    <div class="container">
+      <div class="box">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+      </div>
+      <div class="box">
+        <img id="match-img" src="" alt="Waiting for match...">
+      </div>
     </div>
   </div>
 
@@ -133,7 +202,8 @@
     const alphaSlider = document.getElementById('alphaSlider');
     const alphaVal = document.getElementById('alphaVal');
     const loadingOverlay = document.getElementById('loading-overlay');
-    const loadingText = document.getElementById('loading-text');
+    const mainContent = document.getElementById('main-content');
+    const statusText = document.getElementById('status-text');
 
     alphaSlider.oninput = () => {
       const exprPct = Math.round(alphaSlider.value * 100);
@@ -165,7 +235,6 @@
         offscreen.height = canvas.height;
         const offCtx = offscreen.getContext('2d');
 
-        // Horizontally flip frame sent to backend to match screen mirror orientation
         offCtx.translate(offscreen.width, 0);
         offCtx.scale(-1, 1);
         offCtx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
@@ -185,18 +254,19 @@
       const data = JSON.parse(event.data);
 
       if (data.status === 'loading') {
-        loadingText.innerText = 'Initializing face database on backend...';
+        statusText.innerText = 'Initializing face database on backend...';
         isProcessing = false;
-        setTimeout(sendFrame, 500);
+        setTimeout(sendFrame, 200);
         return;
       }
 
+      // Hide loading overlay and reveal main UI cleanly
       if (loadingOverlay.style.display !== 'none') {
         loadingOverlay.style.display = 'none';
+        mainContent.style.opacity = '1';
       }
 
       if (data.landmarks) {
-        // Flip only the x-coordinates of the landmark points
         currentLandmarks = data.landmarks.map(pt => ({
           x: 1 - pt.x,
           y: pt.y
