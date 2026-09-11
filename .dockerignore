@@ -1,0 +1,8 @@
+venv/
+.git/
+__pycache__/
+*.pyc
+*.har
+.DS_Store
+.idea/
+.vscode/

@@ -1,49 +1,44 @@
 import os
-import cv2
 import json
 import base64
 import asyncio
 import threading
 import traceback
 import numpy as np
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mapping import MEDIAPIPE_TO_ANIME_INDICES
 
 DEFAULT_ALPHA = 0.3  # Alpha = Expression weight; (1 - Alpha) = Spatial weight
+DEFAULT_IMAGE_W, DEFAULT_IMAGE_H = 1280, 720
+MAX_DETECT_WIDTH = 640
 
 anime_filenames = []
+anime_image_dims = []
 matrix_spatial = None
 matrix_expr = None
 landmarker = None
 is_ready = False
-
-
-def get_image_b64(filename):
-    """Dynamically fetch and encode image from disk to avoid RAM OOM crash."""
-    if not filename:
-        return ""
-    img_path = os.path.join("anime_images", filename)
-    if not os.path.exists(img_path):
-        return ""
-    img = cv2.imread(img_path)
-    if img is None:
-        return ""
-    _, buffer = cv2.imencode(".jpg", img)
-    return base64.b64encode(buffer).decode("utf-8")
+num_entries = 0
+load_error = None
 
 
 def load_database():
-    global matrix_spatial, matrix_expr, landmarker, is_ready
+    global matrix_spatial, matrix_expr, landmarker, is_ready, num_entries, load_error
+    load_error = None
     print("Loading database in background...")
 
     try:
         if not os.path.exists("anime_landmarks_db.npy"):
-            print("ERROR: anime_landmarks_db.npy not found!")
+            load_error = "anime_landmarks_db.npy not found!"
+            print(f"ERROR: {load_error}")
             return
 
         raw_db = np.load("anime_landmarks_db.npy", allow_pickle=True).item()
@@ -51,20 +46,21 @@ def load_database():
 
         anime_spatial_vectors = []
         anime_expr_vectors = []
-        image_dir = "anime_images"
 
-        if not os.path.exists(image_dir):
-            print(f"WARNING: Directory '{image_dir}' does not exist.")
-
-        loaded_count = 0
-        w_ref, h_ref = 1920.0, 1080.0  # Default normalization reference frame
-
+        # Compute feature matrices purely from stored landmarks in memory
         for filename, points in raw_db.items():
-            img_path = os.path.join(image_dir, filename)
-            if not os.path.exists(img_path):
+            if isinstance(points, dict):
+                pts_data = points.get("points", [])
+                w = float(points.get("w", DEFAULT_IMAGE_W))
+                h = float(points.get("h", DEFAULT_IMAGE_H))
+            else:
+                pts_data = points
+                w, h = float(DEFAULT_IMAGE_W), float(DEFAULT_IMAGE_H)
+
+            pts = np.array(pts_data, dtype=np.float32)
+            if len(pts) < 2:
                 continue
 
-            pts = np.array(points, dtype=np.float32)
             centroid_raw = np.mean(pts, axis=0)
             centered_raw = pts - centroid_raw
             expr_scale = np.linalg.norm(centered_raw)
@@ -74,29 +70,40 @@ def load_database():
                 if expr_scale > 0
                 else centered_raw.flatten()
             )
+
+            # Spatial vector normalized by the image the landmarks came from:
+            # [Center X%, Center Y%, Face Width %]
             spatial_vec = np.array(
-                [centroid_raw[0] / w_ref, centroid_raw[1] / h_ref, expr_scale / w_ref]
+                [centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w]
             )
 
             anime_filenames.append(filename)
+            anime_image_dims.append((w, h))
             anime_spatial_vectors.append(spatial_vec)
             anime_expr_vectors.append(expr_vec)
-            loaded_count += 1
 
-        print(
-            f"Successfully processed {loaded_count} image vectors for feature matrices."
-        )
+        num_entries = len(anime_filenames)
+        print(f"Successfully processed {num_entries} landmark entries.")
+
+        if num_entries == 0:
+            load_error = "No landmark entries could be processed."
+            print(f"ERROR: {load_error}")
+            return
 
         matrix_spatial = np.array(anime_spatial_vectors)
         matrix_expr = np.array(anime_expr_vectors)
+        del raw_db
 
         if not os.path.exists("face_landmarker.task"):
-            print("ERROR: face_landmarker.task not found!")
+            load_error = "face_landmarker.task not found!"
+            print(f"ERROR: {load_error}")
             return
 
-        print("Initializing MediaPipe Face Landmarker...")
+        print("Initializing MediaPipe Face Landmarker (CPU Mode)...")
+        # Explicit CPU delegate bypasses GPU/GLES library loading
         base_options = python.BaseOptions(
-            model_asset_path="face_landmarker.task"
+            model_asset_path="face_landmarker.task",
+            delegate=python.BaseOptions.Delegate.CPU,
         )
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
@@ -109,11 +116,20 @@ def load_database():
         print("Startup complete. Backend ready.")
 
     except Exception as e:
+        load_error = traceback.format_exc()
         print(f"Fatal error during load_database execution: {e}")
         traceback.print_exc()
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    thread = threading.Thread(target=load_database)
+    thread.daemon = True
+    thread.start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -123,12 +139,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/anime_images", StaticFiles(directory="anime_images"), name="anime_images")
 
-@app.on_event("startup")
-def startup_event():
-    thread = threading.Thread(target=load_database)
-    thread.daemon = True
-    thread.start()
+
+@app.get("/status")
+async def get_status():
+    return {
+        "is_ready": is_ready,
+        "entries": num_entries,
+        "error": load_error,
+    }
 
 
 @app.get("/")
@@ -186,13 +206,23 @@ async def websocket_endpoint(websocket: WebSocket):
             if frame is None:
                 continue
 
+            # Downscale for CPU: landmarks are normalized, so the math is unchanged
             f_h, f_w, _ = frame.shape
+            if f_w > MAX_DETECT_WIDTH:
+                scale = MAX_DETECT_WIDTH / f_w
+                frame = cv2.resize(
+                    frame,
+                    (MAX_DETECT_WIDTH, max(1, int(f_h * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            f_h, f_w, _ = frame.shape
+
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(
                 image_format=mp.ImageFormat.SRGB, data=rgb_frame
             )
 
-            result = landmarker.detect(mp_image)
+            result = await asyncio.to_thread(landmarker.detect, mp_image)
 
             best_filename = None
             landmarks_list = []
@@ -226,21 +256,22 @@ async def websocket_endpoint(websocket: WebSocket):
                     matrix_spatial - h_spatial_vec, axis=1
                 )
 
-                # Normalized linear blend between expression and spatial distance
                 w_expr = alpha
                 w_spatial = 1.0 - alpha
                 total_distances = (w_expr * dist_expr) + (
                     w_spatial * dist_spatial
                 )
 
-                best_match_idx = np.argmin(total_distances)
+                best_match_idx = int(np.argmin(total_distances))
                 best_filename = anime_filenames[best_match_idx]
 
-            matched_image_b64 = get_image_b64(best_filename)
+            matched_image_url = (
+                f"/anime_images/{best_filename}" if best_filename else ""
+            )
 
             await websocket.send_json({
                 "status": "ready",
-                "matched_image": matched_image_b64,
+                "matched_image_url": matched_image_url,
                 "landmarks": landmarks_list,
             })
 

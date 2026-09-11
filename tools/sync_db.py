@@ -64,7 +64,8 @@ if to_add:
         largest_face = max(preds, key=lambda face: (face['bbox'][2] - face['bbox'][0]) * (face['bbox'][3] - face['bbox'][1]))
         keypoints = largest_face['keypoints'][:, :2]
         
-        db[filename] = keypoints.tolist()
+        h, w = image.shape[:2]
+        db[filename] = {"points": keypoints.tolist(), "w": int(w), "h": int(h)}
         print(f"[+] Added {filename} to database.")
 
 # ==========================================
