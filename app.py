@@ -27,50 +27,72 @@ def load_database():
     global matrix_spatial, matrix_expr, landmarker, is_ready
     print("Loading database in background...")
     
-    raw_db = np.load('anime_landmarks_db.npy', allow_pickle=True).item()
-    anime_spatial_vectors = []
-    anime_expr_vectors = []
-    image_dir = 'anime_images'
+    try:
+        if not os.path.exists('anime_landmarks_db.npy'):
+            print("ERROR: anime_landmarks_db.npy not found!")
+            return
 
-    for filename, points in raw_db.items():
-        img_path = os.path.join(image_dir, filename)
-        if not os.path.exists(img_path):
-            continue
+        raw_db = np.load('anime_landmarks_db.npy', allow_pickle=True).item()
+        print(f"Loaded raw_db with {len(raw_db)} entries.")
 
-        img = cv2.imread(img_path)
-        if img is None:
-            continue
+        anime_spatial_vectors = []
+        anime_expr_vectors = []
+        image_dir = 'anime_images'
 
-        # Serve full resolution images
-        _, buffer = cv2.imencode('.jpg', img)
-        anime_base64_cache[filename] = base64.b64encode(buffer).decode('utf-8')
+        if not os.path.exists(image_dir):
+            print(f"WARNING: Directory '{image_dir}' does not exist.")
 
-        h, w = img.shape[:2]
-        pts = np.array(points, dtype=np.float32)
-        centroid_raw = np.mean(pts, axis=0)
-        centered_raw = pts - centroid_raw
-        expr_scale = np.linalg.norm(centered_raw)
+        loaded_count = 0
+        for filename, points in raw_db.items():
+            img_path = os.path.join(image_dir, filename)
+            if not os.path.exists(img_path):
+                continue
 
-        expr_vec = (centered_raw / expr_scale).flatten() if expr_scale > 0 else centered_raw.flatten()
-        spatial_vec = np.array([centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w])
+            img = cv2.imread(img_path)
+            if img is None:
+                continue
 
-        anime_filenames.append(filename)
-        anime_spatial_vectors.append(spatial_vec)
-        anime_expr_vectors.append(expr_vec)
+            # Serve full resolution images
+            _, buffer = cv2.imencode('.jpg', img)
+            anime_base64_cache[filename] = base64.b64encode(buffer).decode('utf-8')
 
-    matrix_spatial = np.array(anime_spatial_vectors)
-    matrix_expr = np.array(anime_expr_vectors)
+            h, w = img.shape[:2]
+            pts = np.array(points, dtype=np.float32)
+            centroid_raw = np.mean(pts, axis=0)
+            centered_raw = pts - centroid_raw
+            expr_scale = np.linalg.norm(centered_raw)
 
-    base_options = python.BaseOptions(model_asset_path='face_landmarker.task')
-    options = vision.FaceLandmarkerOptions(
-        base_options=base_options,
-        running_mode=vision.RunningMode.IMAGE,
-        num_faces=1
-    )
-    landmarker = vision.FaceLandmarker.create_from_options(options)
-    
-    is_ready = True
-    print("Startup complete. Backend ready.")
+            expr_vec = (centered_raw / expr_scale).flatten() if expr_scale > 0 else centered_raw.flatten()
+            spatial_vec = np.array([centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w])
+
+            anime_filenames.append(filename)
+            anime_spatial_vectors.append(spatial_vec)
+            anime_expr_vectors.append(expr_vec)
+            loaded_count += 1
+
+        print(f"Successfully processed {loaded_count} images for feature matrices.")
+
+        matrix_spatial = np.array(anime_spatial_vectors)
+        matrix_expr = np.array(anime_expr_vectors)
+
+        if not os.path.exists('face_landmarker.task'):
+            print("ERROR: face_landmarker.task not found!")
+            return
+
+        print("Initializing MediaPipe Face Landmarker...")
+        base_options = python.BaseOptions(model_asset_path='face_landmarker.task')
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=1
+        )
+        landmarker = vision.FaceLandmarker.create_from_options(options)
+
+        is_ready = True
+        print("Startup complete. Backend ready.")
+
+    except Exception as e:
+        print(f"Fatal error during load_database execution: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
