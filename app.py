@@ -4,6 +4,7 @@ import json
 import base64
 import asyncio
 import threading
+import traceback
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -18,9 +19,22 @@ DEFAULT_ALPHA = 0.3  # Alpha = Expression weight; (1 - Alpha) = Spatial weight
 anime_filenames = []
 matrix_spatial = None
 matrix_expr = None
-anime_base64_cache = {}
 landmarker = None
 is_ready = False
+
+
+def get_image_b64(filename):
+    """Dynamically fetch and encode image from disk to avoid RAM OOM crash."""
+    if not filename:
+        return ""
+    img_path = os.path.join("anime_images", filename)
+    if not os.path.exists(img_path):
+        return ""
+    img = cv2.imread(img_path)
+    if img is None:
+        return ""
+    _, buffer = cv2.imencode(".jpg", img)
+    return base64.b64encode(buffer).decode("utf-8")
 
 
 def load_database():
@@ -43,22 +57,13 @@ def load_database():
             print(f"WARNING: Directory '{image_dir}' does not exist.")
 
         loaded_count = 0
+        w_ref, h_ref = 1920.0, 1080.0  # Default normalization reference frame
+
         for filename, points in raw_db.items():
             img_path = os.path.join(image_dir, filename)
             if not os.path.exists(img_path):
                 continue
 
-            img = cv2.imread(img_path)
-            if img is None:
-                continue
-
-            # Serve full resolution images
-            _, buffer = cv2.imencode(".jpg", img)
-            anime_base64_cache[filename] = base64.b64encode(buffer).decode(
-                "utf-8"
-            )
-
-            h, w = img.shape[:2]
             pts = np.array(points, dtype=np.float32)
             centroid_raw = np.mean(pts, axis=0)
             centered_raw = pts - centroid_raw
@@ -70,7 +75,7 @@ def load_database():
                 else centered_raw.flatten()
             )
             spatial_vec = np.array(
-                [centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w]
+                [centroid_raw[0] / w_ref, centroid_raw[1] / h_ref, expr_scale / w_ref]
             )
 
             anime_filenames.append(filename)
@@ -79,8 +84,7 @@ def load_database():
             loaded_count += 1
 
         print(
-            f"Successfully processed {loaded_count} images for feature"
-            " matrices."
+            f"Successfully processed {loaded_count} image vectors for feature matrices."
         )
 
         matrix_spatial = np.array(anime_spatial_vectors)
@@ -106,6 +110,7 @@ def load_database():
 
     except Exception as e:
         print(f"Fatal error during load_database execution: {e}")
+        traceback.print_exc()
 
 
 app = FastAPI()
@@ -231,11 +236,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 best_match_idx = np.argmin(total_distances)
                 best_filename = anime_filenames[best_match_idx]
 
-            matched_image_b64 = (
-                anime_base64_cache.get(best_filename, "")
-                if best_filename
-                else ""
-            )
+            matched_image_b64 = get_image_b64(best_filename)
 
             await websocket.send_json({
                 "status": "ready",
