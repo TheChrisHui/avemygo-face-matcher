@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Anime Face Matcher</title>
-  <link rel="icon" type="image/x-icon" href="./favicon.ico">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
   <style>
     * {
       box-sizing: border-box;
@@ -238,7 +238,7 @@
   <div id="loading-overlay">
     <div class="loading-card">
       <div class="gif-container">
-        <img src="./loading.gif" alt="Loading...">
+        <img src="loading.gif" alt="Loading...">
       </div>
       <div class="progress-track">
         <div class="progress-bar"></div>
@@ -308,7 +308,14 @@
       alphaVal.innerText = `Expr (${exprPct}%) / Spatial (${spatialPct}%)`;
     };
 
-    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const RENDER_BACKEND_URL = "your-render-app-name.onrender.com"; // Replace with your actual Render domain
+
+    const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const wsHost = location.hostname === "localhost" || location.hostname === "127.0.0.1"
+      ? `${location.host}/ws`
+      : `${RENDER_BACKEND_URL}/ws`;
+
+    const ws = new WebSocket(`${wsProtocol}//${wsHost}`);
 
     let isProcessing = false;
     let currentLandmarks = null;

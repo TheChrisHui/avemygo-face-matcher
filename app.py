@@ -88,11 +88,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 @app.get("/")
 async def get_index():
     return FileResponse("index.html")
+
+@app.get("/favicon.ico")
+async def get_favicon():
+    return FileResponse("favicon.ico")
+
+@app.get("/loading.gif")
+async def get_loading():
+    return FileResponse("loading.gif")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
