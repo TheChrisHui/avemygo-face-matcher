@@ -308,15 +308,14 @@
       alphaVal.innerText = `Expr (${exprPct}%) / Spatial (${spatialPct}%)`;
     };
 
-    const RENDER_BACKEND_URL = "avemygo-face-matcher.onrender.com"; // Replace with your actual Render domain
+    const RENDER_BACKEND_URL = "avemygo-face-matcher.onrender.com";
 
-    const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const wsHost = location.hostname === "localhost" || location.hostname === "127.0.0.1"
-      ? `${location.host}/ws`
-      : `${RENDER_BACKEND_URL}/ws`;
+    const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    const wsProtocol = (location.protocol === "https:" || !isLocal) ? "wss:" : "ws:";
+    const wsHost = isLocal ? location.host : RENDER_BACKEND_URL;
 
-    // Test WebSocket connection immediately before waiting for camera permissions
-    const ws = new WebSocket(`${wsProtocol}//${wsHost}`);
+    // Correct URL structure without duplicate protocols or slashes
+    const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
 
     ws.onopen = () => {
       console.log("WebSocket connection established!");
