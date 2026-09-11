@@ -17,7 +17,6 @@ env/
 urltxt/
 
 # Generated Database / Models
-anime_landmarks_db.npy
 *.task
 
 # IDE / OS junk
