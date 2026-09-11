@@ -16,9 +16,6 @@ env/
 #anime_images/
 urltxt/
 
-# Generated Database / Models
-*.task
-
 # IDE / OS junk
 .DS_Store
 .vscode/
