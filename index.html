@@ -315,7 +315,16 @@
       ? `${location.host}/ws`
       : `${RENDER_BACKEND_URL}/ws`;
 
+    // Test WebSocket connection immediately before waiting for camera permissions
     const ws = new WebSocket(`${wsProtocol}//${wsHost}`);
+
+    ws.onopen = () => {
+      console.log("WebSocket connection established!");
+    };
+
+    ws.onerror = (err) => {
+      console.error("WebSocket connection failed:", err);
+    };
 
     let isProcessing = false;
     let currentLandmarks = null;

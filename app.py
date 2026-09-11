@@ -111,6 +111,7 @@ app.add_middleware(
 )
 
 @app.get("/")
+@app.head("/")
 async def get_index():
     return FileResponse("index.html")
 
