@@ -1,106 +1,16 @@
-import os
-import cv2
-import json
 import base64
-import asyncio
+import os
+import threading
+import cv2
 import numpy as np
-from contextlib import asynccontextmanager
+import mediapipe as mp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-from mapping import MEDIAPIPE_TO_ANIME_INDICES
 
-DEFAULT_ALPHA = 0.3  # Alpha = Expression weight; (1 - Alpha) = Spatial weight
-
-anime_filenames = []
-matrix_spatial = None
-matrix_expr = None
-anime_base64_cache = {}
-landmarker = None
-is_ready = False
-
-def load_database():
-    global matrix_spatial, matrix_expr, landmarker, is_ready
-    print("Loading database in background...")
-    
-    try:
-        if not os.path.exists('anime_landmarks_db.npy'):
-            print("ERROR: anime_landmarks_db.npy not found!")
-            return
-
-        raw_db = np.load('anime_landmarks_db.npy', allow_pickle=True).item()
-        print(f"Loaded raw_db with {len(raw_db)} entries.")
-
-        anime_spatial_vectors = []
-        anime_expr_vectors = []
-        image_dir = 'anime_images'
-
-        if not os.path.exists(image_dir):
-            print(f"WARNING: Directory '{image_dir}' does not exist.")
-
-        loaded_count = 0
-        for filename, points in raw_db.items():
-            img_path = os.path.join(image_dir, filename)
-            if not os.path.exists(img_path):
-                continue
-
-            img = cv2.imread(img_path)
-            if img is None:
-                continue
-
-            # Serve full resolution images
-            _, buffer = cv2.imencode('.jpg', img)
-            anime_base64_cache[filename] = base64.b64encode(buffer).decode('utf-8')
-
-            h, w = img.shape[:2]
-            pts = np.array(points, dtype=np.float32)
-            centroid_raw = np.mean(pts, axis=0)
-            centered_raw = pts - centroid_raw
-            expr_scale = np.linalg.norm(centered_raw)
-
-            expr_vec = (centered_raw / expr_scale).flatten() if expr_scale > 0 else centered_raw.flatten()
-            spatial_vec = np.array([centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w])
-
-            anime_filenames.append(filename)
-            anime_spatial_vectors.append(spatial_vec)
-            anime_expr_vectors.append(expr_vec)
-            loaded_count += 1
-
-        print(f"Successfully processed {loaded_count} images for feature matrices.")
-
-        matrix_spatial = np.array(anime_spatial_vectors)
-        matrix_expr = np.array(anime_expr_vectors)
-
-        if not os.path.exists('face_landmarker.task'):
-            print("ERROR: face_landmarker.task not found!")
-            return
-
-        print("Initializing MediaPipe Face Landmarker...")
-        base_options = python.BaseOptions(model_asset_path='face_landmarker.task')
-        options = vision.FaceLandmarkerOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.IMAGE,
-            num_faces=1
-        )
-        landmarker = vision.FaceLandmarker.create_from_options(options)
-
-        is_ready = True
-        print("Startup complete. Backend ready.")
-
-    except Exception as e:
-        print(f"Fatal error during load_database execution: {e}")
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Run heavy database loading in background thread so server starts instantly
-    asyncio.create_task(asyncio.to_thread(load_database))
-    yield
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -110,103 +20,192 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+matrix_spatial = None
+matrix_expr = None
+anime_filenames = []
+landmarker = None
+is_ready = False
+
+
+def load_database():
+    global matrix_spatial, matrix_expr, landmarker, is_ready
+    print("Loading database in background...")
+
+    try:
+        if not os.path.exists("anime_landmarks_db.npy"):
+            print("ERROR: anime_landmarks_db.npy not found!")
+            return
+
+        raw_db = np.load("anime_landmarks_db.npy", allow_pickle=True).item()
+        print(f"Loaded raw_db with {len(raw_db)} entries.")
+
+        anime_spatial_vectors = []
+        anime_expr_vectors = []
+        image_dir = "anime_images"
+
+        for filename, points in raw_db.items():
+            img_path = os.path.join(image_dir, filename)
+            h, w = 1080, 1920
+
+            # Get image dimensions without storing heavy base64 strings in memory
+            if os.path.exists(img_path):
+                img = cv2.imread(img_path)
+                if img is not None:
+                    h, w = img.shape[:2]
+
+            pts = np.array(points, dtype=np.float32)
+            centroid_raw = np.mean(pts, axis=0)
+            centered_raw = pts - centroid_raw
+            expr_scale = np.linalg.norm(centered_raw)
+
+            expr_vec = (
+                (centered_raw / expr_scale).flatten()
+                if expr_scale > 0
+                else centered_raw.flatten()
+            )
+            spatial_vec = np.array(
+                [centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w]
+            )
+
+            anime_filenames.append(filename)
+            anime_spatial_vectors.append(spatial_vec)
+            anime_expr_vectors.append(expr_vec)
+
+        matrix_spatial = np.array(anime_spatial_vectors)
+        matrix_expr = np.array(anime_expr_vectors)
+
+        if not os.path.exists("face_landmarker.task"):
+            print("ERROR: face_landmarker.task not found!")
+            return
+
+        print("Initializing MediaPipe Face Landmarker...")
+        base_options = python.BaseOptions(model_asset_path="face_landmarker.task")
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+            num_faces=1,
+        )
+        landmarker = vision.FaceLandmarker.create_from_options(options)
+
+        is_ready = True
+        print("Startup complete. Backend ready.")
+
+    except Exception as e:
+        print(f"Fatal error during load_database execution: {e}")
+
+
+@app.on_event("startup")
+def startup_event():
+    thread = threading.Thread(target=load_database)
+    thread.daemon = True
+    thread.start()
+
+
 @app.get("/")
-async def get_index():
+def read_root():
     return FileResponse("index.html")
 
-@app.get("/favicon.ico")
-async def get_favicon():
-    return FileResponse("favicon.ico")
 
 @app.get("/loading.gif")
-async def get_loading():
+def get_loading_gif():
     return FileResponse("loading.gif")
+
+
+@app.get("/favicon.ico")
+def get_favicon():
+    return FileResponse("favicon.ico")
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    try:
-        while True:
-            message_text = await websocket.receive_text()
+
+    while True:
+        try:
+            data = await websocket.receive_json()
 
             if not is_ready:
                 await websocket.send_json({"status": "loading"})
                 continue
 
-            image_data = ""
-            alpha = DEFAULT_ALPHA
-
-            if message_text.startswith("{"):
-                try:
-                    payload = json.loads(message_text)
-                    image_data = payload.get("image", "")
-                    alpha = float(payload.get("alpha", DEFAULT_ALPHA))
-                except Exception:
-                    continue
-            else:
-                image_data = message_text
+            image_data = data.get("image", "")
+            alpha = float(data.get("alpha", 0.3))
 
             if not image_data.startswith("data:image"):
+                await websocket.send_json({"status": "error", "message": "Invalid image format"})
                 continue
 
-            try:
-                header, encoded = image_data.split(",", 1)
-                img_bytes = base64.b64decode(encoded)
-                nparr = np.frombuffer(img_bytes, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            except Exception:
-                continue
+            encoded_data = image_data.split(",")[1]
+            nparr = np.frombuffer(base64.b64decode(encoded_data), np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if frame is None:
+                await websocket.send_json({"status": "error", "message": "Decode failed"})
                 continue
 
-            f_h, f_w, _ = frame.shape
+            h, w = frame.shape[:2]
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
-            result = landmarker.detect(mp_image)
+            detection_result = landmarker.detect(mp_image)
 
-            best_filename = None
-            landmarks_list = []
+            if not detection_result.face_landmarks:
+                await websocket.send_json({"landmarks": None, "matched_image": None})
+                continue
 
-            if result.face_landmarks:
-                face = result.face_landmarks[0]
-                h_canvas = []
-                for idx in MEDIAPIPE_TO_ANIME_INDICES:
-                    nx, ny = face[idx].x, face[idx].y
-                    landmarks_list.append({"x": nx, "y": ny})
-                    h_canvas.append([nx * f_w, ny * f_h])
+            user_landmarks = detection_result.face_landmarks[0]
+            pts = np.array([[pt.x * w, pt.y * h] for pt in user_landmarks], dtype=np.float32)
 
-                h_pts = np.array(h_canvas, dtype=np.float32)
-                h_centroid = np.mean(h_pts, axis=0)
-                h_centered = h_pts - h_centroid
-                h_expr_scale = np.linalg.norm(h_centered)
-                h_expr_vec = (h_centered / h_expr_scale).flatten() if h_expr_scale > 0 else h_centered.flatten()
+            centroid_raw = np.mean(pts, axis=0)
+            centered_raw = pts - centroid_raw
+            expr_scale = np.linalg.norm(centered_raw)
 
-                h_spatial_vec = np.array([
-                    h_centroid[0] / f_w,
-                    h_centroid[1] / f_h,
-                    h_expr_scale / f_w
-                ])
+            user_expr_vec = (
+                (centered_raw / expr_scale).flatten()
+                if expr_scale > 0
+                else centered_raw.flatten()
+            )
+            user_spatial_vec = np.array(
+                [centroid_raw[0] / w, centroid_raw[1] / h, expr_scale / w]
+            )
 
-                dist_expr = np.linalg.norm(matrix_expr - h_expr_vec, axis=1)
-                dist_spatial = np.linalg.norm(matrix_spatial - h_spatial_vec, axis=1)
+            dist_spatial = np.linalg.norm(matrix_spatial - user_spatial_vec, axis=1)
+            dist_expr = np.linalg.norm(matrix_expr - user_expr_vec, axis=1)
 
-                # Normalized linear blend between expression and spatial distance
-                w_expr = alpha
-                w_spatial = 1.0 - alpha
-                total_distances = (w_expr * dist_expr) + (w_spatial * dist_spatial)
+            norm_spatial = (
+                dist_spatial / np.max(dist_spatial)
+                if np.max(dist_spatial) > 0
+                else dist_spatial
+            )
+            norm_expr = (
+                dist_expr / np.max(dist_expr)
+                if np.max(dist_expr) > 0
+                else dist_expr
+            )
 
-                best_match_idx = np.argmin(total_distances)
-                best_filename = anime_filenames[best_match_idx]
+            combined_dist = (1 - alpha) * norm_spatial + alpha * norm_expr
+            best_idx = int(np.argmin(combined_dist))
+            best_filename = anime_filenames[best_idx]
 
-            matched_image_b64 = anime_base64_cache.get(best_filename, "") if best_filename else ""
+            # Dynamically read and base64-encode only the matched image
+            matched_image_b64 = ""
+            matched_path = os.path.join("anime_images", best_filename)
+            if os.path.exists(matched_path):
+                img = cv2.imread(matched_path)
+                if img is not None:
+                    _, buffer = cv2.imencode(".jpg", img)
+                    matched_image_b64 = base64.b64encode(buffer).decode("utf-8")
+
+            landmark_pts = [{"x": pt.x, "y": pt.y} for pt in user_landmarks]
 
             await websocket.send_json({
-                "status": "ready",
+                "status": "success",
+                "landmarks": landmark_pts,
                 "matched_image": matched_image_b64,
-                "landmarks": landmarks_list
             })
 
-    except WebSocketDisconnect:
-        pass
+        except WebSocketDisconnect:
+            break
+        except Exception as e:
+            print(f"Error in websocket loop: {e}")
+            break
