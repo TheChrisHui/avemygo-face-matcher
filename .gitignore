@@ -9,6 +9,9 @@ venv/
 .venv/
 env/
 
+#Capture Logs
+*.har
+
 # Large Datasets & Media
 #anime_images/
 urltxt/
