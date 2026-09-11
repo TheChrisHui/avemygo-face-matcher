@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/ave-mujica-logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@100..900&display=swap" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="截圖搜尋器 MyGO & Mujica" />
+    <meta
+      property="og:description"
+      content="截圖搜尋器 MyGO & Mujica。可透過關鍵字搜尋MyGO與Ave Mujica母雞卡的台詞截圖、梗圖，並用於各類訊息、留言回覆，歡迎進入BanG Dream - MyGO & Ave Mujica的世界！"
+    />
+    <meta property="og:image" content="https://i.imgur.com/gUz7OVD.jpeg" />
+    <meta property="og:url" content="https://ave-mujica-images.pages.dev/" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="截圖搜尋器 MyGO & Mujica" />
+    <meta
+      name="twitter:description"
+      content="截圖搜尋器 MyGO & Mujica。可透過關鍵字搜尋MyGO與Ave Mujica母雞卡的台詞截圖、梗圖，並用於各類訊息、留言回覆，歡迎進入BanG Dream - MyGO & Ave Mujica的世界！"
+    />
+    <meta name="twitter:image" content="https://i.imgur.com/gUz7OVD.jpeg" />
+    <meta name="twitter:url" content="https://ave-mujica-images.pages.dev/" />
+    <meta name="twitter:site" content="@wei_chiao_chen" />
+    <meta name="twitter:creator" content="@wei_chiao_chen " />
+
+    <title>截圖搜尋器 MyGO & Mujica</title>
+    <script type="module" crossorigin src="/assets/index-BuraXok8.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CCK1BwH1.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

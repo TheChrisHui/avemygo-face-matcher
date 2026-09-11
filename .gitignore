@@ -10,7 +10,7 @@ venv/
 env/
 
 # Large Datasets & Media
-anime_images/
+#anime_images/
 urltxt/
 
 # Generated Database / Models
