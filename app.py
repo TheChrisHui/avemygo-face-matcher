@@ -92,7 +92,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 async def get_index():
-    return FileResponse("static/index.html")
+    return FileResponse("index.html")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
