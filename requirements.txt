@@ -1,0 +1,6 @@
+anime_face_detector==0.1.0
+fastapi==0.141.1
+mediapipe==0.10.35
+numpy==2.5.3
+opencv_contrib_python==5.0.0.93
+opencv_python==5.0.0.93
