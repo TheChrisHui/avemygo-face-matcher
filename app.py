@@ -2,29 +2,31 @@ import os
 import cv2
 import json
 import base64
+import asyncio
 import numpy as np
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mapping import MEDIAPIPE_TO_ANIME_INDICES
 
-DEFAULT_ALPHA = 0.3  # Alpha = Expression weight; (1 - Alpha) = Spatial weight
+DEFAULT_ALPHA = 0.3
 
 anime_filenames = []
 matrix_spatial = None
 matrix_expr = None
 anime_base64_cache = {}
 landmarker = None
+is_ready = False  # Track backend loading state
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global matrix_spatial, matrix_expr, landmarker
+def load_database():
+    global matrix_spatial, matrix_expr, landmarker, is_ready
+    print("Loading database in background...")
     
-    print("Loading database...")
     raw_db = np.load('anime_landmarks_db.npy', allow_pickle=True).item()
     anime_spatial_vectors = []
     anime_expr_vectors = []
@@ -39,7 +41,6 @@ async def lifespan(app: FastAPI):
         if img is None:
             continue
 
-        # Serve full resolution images
         _, buffer = cv2.imencode('.jpg', img)
         anime_base64_cache[filename] = base64.b64encode(buffer).decode('utf-8')
 
@@ -66,10 +67,27 @@ async def lifespan(app: FastAPI):
         num_faces=1
     )
     landmarker = vision.FaceLandmarker.create_from_options(options)
-    print("Startup complete. Ready for requests.")
+    
+    is_ready = True
+    print("Database loading complete. Backend ready.")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Run heavy loading in a separate thread so server starts instantly
+    asyncio.create_task(asyncio.to_thread(load_database))
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+# Allow cross-origin requests for deployment on GitHub Pages
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
@@ -82,7 +100,12 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             message_text = await websocket.receive_text()
-            
+
+            # Inform frontend if backend is still initializing
+            if not is_ready:
+                await websocket.send_json({"status": "loading"})
+                continue
+
             image_data = ""
             alpha = DEFAULT_ALPHA
 
@@ -119,43 +142,47 @@ async def websocket_endpoint(websocket: WebSocket):
             best_filename = None
             landmarks_list = []
 
-            if result.face_landmarks:
+            if result.face_landmarks and len(result.face_landmarks) > 0:
                 face = result.face_landmarks[0]
                 h_canvas = []
                 for idx in MEDIAPIPE_TO_ANIME_INDICES:
-                    nx, ny = face[idx].x, face[idx].y
-                    landmarks_list.append({"x": nx, "y": ny})
-                    h_canvas.append([nx * f_w, ny * f_h])
+                    if idx < len(face):
+                        nx, ny = face[idx].x, face[idx].y
+                        landmarks_list.append({"x": nx, "y": ny})
+                        h_canvas.append([nx * f_w, ny * f_h])
 
-                h_pts = np.array(h_canvas, dtype=np.float32)
-                h_centroid = np.mean(h_pts, axis=0)
-                h_centered = h_pts - h_centroid
-                h_expr_scale = np.linalg.norm(h_centered)
-                h_expr_vec = (h_centered / h_expr_scale).flatten() if h_expr_scale > 0 else h_centered.flatten()
+                if len(h_canvas) == len(MEDIAPIPE_TO_ANIME_INDICES):
+                    h_pts = np.array(h_canvas, dtype=np.float32)
+                    h_centroid = np.mean(h_pts, axis=0)
+                    h_centered = h_pts - h_centroid
+                    h_expr_scale = np.linalg.norm(h_centered)
+                    h_expr_vec = (h_centered / h_expr_scale).flatten() if h_expr_scale > 0 else h_centered.flatten()
 
-                h_spatial_vec = np.array([
-                    h_centroid[0] / f_w,
-                    h_centroid[1] / f_h,
-                    h_expr_scale / f_w
-                ])
+                    h_spatial_vec = np.array([
+                        h_centroid[0] / f_w,
+                        h_centroid[1] / f_h,
+                        h_expr_scale / f_w
+                    ])
 
-                dist_expr = np.linalg.norm(matrix_expr - h_expr_vec, axis=1)
-                dist_spatial = np.linalg.norm(matrix_spatial - h_spatial_vec, axis=1)
+                    dist_expr = np.linalg.norm(matrix_expr - h_expr_vec, axis=1)
+                    dist_spatial = np.linalg.norm(matrix_spatial - h_spatial_vec, axis=1)
 
-                # Normalized linear blend between expression and spatial distance
-                w_expr = alpha
-                w_spatial = 1.0 - alpha
-                total_distances = (w_expr * dist_expr) + (w_spatial * dist_spatial)
+                    w_expr = alpha
+                    w_spatial = 1.0 - alpha
+                    total_distances = (w_expr * dist_expr) + (w_spatial * dist_spatial)
 
-                best_match_idx = np.argmin(total_distances)
-                best_filename = anime_filenames[best_match_idx]
+                    best_match_idx = np.argmin(total_distances)
+                    best_filename = anime_filenames[best_match_idx]
 
             matched_image_b64 = anime_base64_cache.get(best_filename, "") if best_filename else ""
 
             await websocket.send_json({
+                "status": "ready",
                 "matched_image": matched_image_b64,
                 "landmarks": landmarks_list
             })
 
     except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print(f"Error in WS loop: {e}")
