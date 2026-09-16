@@ -6,6 +6,7 @@ import threading
 import traceback
 import numpy as np
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -276,7 +277,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 best_filename = anime_filenames[best_match_idx]
 
             matched_image_url = (
-                f"/anime_images/{best_filename}" if best_filename else ""
+                f"/anime_images/{quote(best_filename)}" if best_filename else ""
             )
 
             await websocket.send_json({

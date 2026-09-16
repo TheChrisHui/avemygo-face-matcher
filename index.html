@@ -315,7 +315,8 @@
     const wsHost = isLocal ? location.host : RENDER_BACKEND_URL;
     // Absolute origin of the Render backend, for loading matched images served
     // as static files on Render (the page itself may be served from GitHub Pages).
-    const backendOrigin = isLocal ? "" : `${wsProtocol}//${wsHost}`;
+    // Use https:, NOT wss: — images are loaded via HTTP, not the websocket.
+    const backendOrigin = isLocal ? "" : `https://${wsHost}`;
 
     // Correct URL structure without duplicate protocols or slashes
     const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
