@@ -340,12 +340,25 @@
       } 
     }).then(stream => {
       video.srcObject = stream;
-      video.onloadedmetadata = () => {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        requestAnimationFrame(renderLoop);
-        sendFrame();
-      };
+      return new Promise((resolve, reject) => {
+        if (video.readyState >= 1) {
+          resolve();
+        } else {
+          video.onloadedmetadata = resolve;
+          video.onerror = reject;
+        }
+      });
+    }).then(() => {
+      const w = video.videoWidth || 640;
+      const h = video.videoHeight || 480;
+      canvas.width = w;
+      canvas.height = h;
+      video.play().catch(() => {});
+      requestAnimationFrame(renderLoop);
+      sendFrame();
+    }).catch(err => {
+      statusText.innerText = 'Camera error: ' + (err && err.name ? err.name : err);
+      console.error('getUserMedia error:', err);
     });
 
     function sendFrame() {
@@ -362,6 +375,12 @@
         offCtx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
 
         const dataUrl = offscreen.toDataURL('image/jpeg', 0.5);
+
+        if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image') !== 0) {
+          isProcessing = false;
+          setTimeout(sendFrame, 100);
+          return;
+        }
 
         const payload = JSON.stringify({
           image: dataUrl,

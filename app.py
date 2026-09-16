@@ -28,6 +28,8 @@ landmarker = None
 is_ready = False
 num_entries = 0
 load_error = None
+frames_received = 0
+faces_detected = 0
 
 
 def load_database():
@@ -148,6 +150,8 @@ async def get_status():
         "is_ready": is_ready,
         "entries": num_entries,
         "error": load_error,
+        "frames_received": frames_received,
+        "faces_detected": faces_detected,
     }
 
 
@@ -169,6 +173,7 @@ async def get_loading():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    global frames_received, faces_detected
     await websocket.accept()
     try:
         while True:
@@ -206,6 +211,8 @@ async def websocket_endpoint(websocket: WebSocket):
             if frame is None:
                 continue
 
+            frames_received += 1
+
             # Downscale for CPU: landmarks are normalized, so the math is unchanged
             f_h, f_w, _ = frame.shape
             if f_w > MAX_DETECT_WIDTH:
@@ -223,6 +230,9 @@ async def websocket_endpoint(websocket: WebSocket):
             )
 
             result = await asyncio.to_thread(landmarker.detect, mp_image)
+
+            if result.face_landmarks:
+                faces_detected += 1
 
             best_filename = None
             landmarks_list = []
