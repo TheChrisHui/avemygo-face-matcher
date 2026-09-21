@@ -319,18 +319,150 @@
     const backendOrigin = isLocal ? "" : `https://${wsHost}`;
 
     // Correct URL structure without duplicate protocols or slashes
-    const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
+    const websocketUrl = `${wsProtocol}//${wsHost}/ws`;
 
-    ws.onopen = () => {
-      console.log("WebSocket connection established!");
-    };
-
-    ws.onerror = (err) => {
-      console.error("WebSocket connection failed:", err);
-    };
-
+    let ws = null;
     let isProcessing = false;
     let currentLandmarks = null;
+    let cameraReady = false;
+    let loadingSince = null;
+    let statusCheckedAt = 0;
+    let sendingSince = 0;
+
+    function connectWS() {
+      try { if (ws) ws.close(); } catch (e) {}
+      ws = new WebSocket(websocketUrl);
+      ws.onopen = () => {
+        console.log("WebSocket connection established!");
+        if (cameraReady) sendFrame();
+      };
+      ws.onerror = () => {
+        try { ws.close(); } catch (e) {}
+      };
+      ws.onclose = () => {
+        console.warn("WebSocket closed; reconnecting in 2s...");
+        setTimeout(connectWS, 2000);
+      };
+      ws.onmessage = onWSMessage;
+    }
+
+    function scheduleNextFrame(delay) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        setTimeout(sendFrame, delay);
+      } else {
+        setTimeout(scheduleNextFrame, 500);
+      }
+    }
+
+    function sendFrame() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        isProcessing = false;
+        setTimeout(scheduleNextFrame, 500);
+        return;
+      }
+      if (isProcessing) {
+        // Watchdog: if we never got a reply, reset so the loop can't stall.
+        if (Date.now() - sendingSince > 5000) {
+          isProcessing = false;
+        } else {
+          setTimeout(sendFrame, 100);
+          return;
+        }
+      }
+      isProcessing = true;
+      sendingSince = Date.now();
+
+      const offscreen = document.createElement('canvas');
+      offscreen.width = canvas.width;
+      offscreen.height = canvas.height;
+      const offCtx = offscreen.getContext('2d');
+
+      offCtx.translate(offscreen.width, 0);
+      offCtx.scale(-1, 1);
+      offCtx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
+
+      const dataUrl = offscreen.toDataURL('image/jpeg', 0.5);
+
+      if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image') !== 0) {
+        isProcessing = false;
+        setTimeout(sendFrame, 100);
+        return;
+      }
+
+      const payload = JSON.stringify({
+        image: dataUrl,
+        alpha: parseFloat(alphaSlider.value)
+      });
+
+      try {
+        ws.send(payload);
+      } catch (e) {
+        isProcessing = false;
+        scheduleNextFrame(500);
+      }
+    }
+
+    function onWSMessage(event) {
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        isProcessing = false;
+        scheduleNextFrame(16);
+        return;
+      }
+
+      if (data.status === 'loading') {
+        if (!loadingSince) loadingSince = Date.now();
+        const elapsed = Math.round((Date.now() - loadingSince) / 1000);
+        let msg = `Initializing face database on backend... (${elapsed}s)`;
+        if (elapsed > 45) {
+          msg += ' Render free tier cold start can take up to a minute.';
+        }
+        if (elapsed > 90 && statusCheckedAt !== elapsed) {
+          statusCheckedAt = elapsed;
+          fetch(`${backendOrigin}/status`)
+            .then(r => r.json())
+            .then(s => {
+              if (s.error) {
+                statusText.innerText = 'Backend error: ' +
+                  (s.error.length > 200 ? s.error.slice(0, 200) + '...' : s.error);
+              } else if (s.is_ready) {
+                statusText.innerText = 'Backend just became ready...';
+              }
+            })
+            .catch(() => {});
+        }
+        statusText.innerText = msg;
+        isProcessing = false;
+        setTimeout(sendFrame, 200);
+        return;
+      }
+
+      loadingSince = null;
+      if (loadingOverlay.style.display !== 'none') {
+        loadingOverlay.style.display = 'none';
+        mainContent.style.opacity = '1';
+      }
+
+      if (data.landmarks) {
+        currentLandmarks = data.landmarks.map(pt => ({
+          x: 1 - pt.x,
+          y: pt.y
+        }));
+      } else {
+        currentLandmarks = null;
+      }
+
+      if (data.matched_image_url) {
+        matchImg.src = backendOrigin + data.matched_image_url;
+      }
+
+      isProcessing = false;
+      setTimeout(sendFrame, 16);
+    }
+
+    connectWS();
 
     // Mobile-optimized media constraints
     navigator.mediaDevices.getUserMedia({ 
@@ -355,74 +487,13 @@
       canvas.width = w;
       canvas.height = h;
       video.play().catch(() => {});
+      cameraReady = true;
       requestAnimationFrame(renderLoop);
       sendFrame();
     }).catch(err => {
       statusText.innerText = 'Camera error: ' + (err && err.name ? err.name : err);
       console.error('getUserMedia error:', err);
     });
-
-    function sendFrame() {
-      if (ws.readyState === WebSocket.OPEN && !isProcessing) {
-        isProcessing = true;
-
-        const offscreen = document.createElement('canvas');
-        offscreen.width = canvas.width;
-        offscreen.height = canvas.height;
-        const offCtx = offscreen.getContext('2d');
-
-        offCtx.translate(offscreen.width, 0);
-        offCtx.scale(-1, 1);
-        offCtx.drawImage(video, 0, 0, offscreen.width, offscreen.height);
-
-        const dataUrl = offscreen.toDataURL('image/jpeg', 0.5);
-
-        if (typeof dataUrl !== 'string' || dataUrl.indexOf('data:image') !== 0) {
-          isProcessing = false;
-          setTimeout(sendFrame, 100);
-          return;
-        }
-
-        const payload = JSON.stringify({
-          image: dataUrl,
-          alpha: parseFloat(alphaSlider.value)
-        });
-
-        ws.send(payload);
-      }
-    }
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.status === 'loading') {
-        statusText.innerText = 'Initializing face database on backend...';
-        isProcessing = false;
-        setTimeout(sendFrame, 200);
-        return;
-      }
-
-      if (loadingOverlay.style.display !== 'none') {
-        loadingOverlay.style.display = 'none';
-        mainContent.style.opacity = '1';
-      }
-
-      if (data.landmarks) {
-        currentLandmarks = data.landmarks.map(pt => ({
-          x: 1 - pt.x,
-          y: pt.y
-        }));
-      } else {
-        currentLandmarks = null;
-      }
-
-      if (data.matched_image_url) {
-        matchImg.src = backendOrigin + data.matched_image_url;
-      }
-
-      isProcessing = false;
-      setTimeout(sendFrame, 16);
-    };
 
     function renderLoop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
